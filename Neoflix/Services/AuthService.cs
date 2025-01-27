@@ -1,6 +1,8 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Http;
 using Neo4j.Driver;
 using Neoflix.Exceptions;
 using BCryptNet = BCrypt.Net.BCrypt;
@@ -40,28 +42,34 @@ namespace Neoflix.Services
         {
             var rounds = Config.UnpackPasswordConfig();
             var encrypted = BCryptNet.HashPassword(plainPassword, rounds);
-            // tag::constraintError[]
-            // TODO: Handle Unique constraints in the database
-            if (email != "graphacademy@neo4j.com")
-                throw new ValidationException($"An account already exists with the email address", email);
-            // end::constraintError[]
-            
-            // TODO: Save user
-            var exampleUser = new Dictionary<string, object>
+
+            var session = _driver.AsyncSession();
+
+            try
             {
-                ["identity"] = 1,
-                ["properties"] = new Dictionary<string, object>
+                var user = await session.ExecuteWriteAsync(async tx =>
                 {
-                    ["userId"] = 1,
-                    ["email"] = "graphacademy@neo4j.com",
-                    ["name"] = "Graph Academy"
-                }
-            };
+                    var cursor = await tx.RunAsync(@"
+                                        CREATE (u:User {
+                                            userId: randomUuid(),
+                                            email: $email,
+                                            password: $encrypted,
+                                            name: $name
+                                        })
+                                        RETURN u { .userId, .name, .email } as u", new { email, encrypted, name });
+                    var user = await cursor.SingleAsync();
+                    return user["u"].As<Dictionary<string, object>>();
+                });
 
-            var safeProperties = SafeProperties(exampleUser["properties"] as Dictionary<string, object>);
-            safeProperties.Add("token", JwtHelper.CreateToken(GetUserClaims(safeProperties)));
+                var safeProperties = SafeProperties(user);
+                safeProperties.Add("token", JwtHelper.CreateToken(GetUserClaims(safeProperties)));
 
-            return safeProperties;
+                return safeProperties;
+            }
+            catch (Exception ex)
+            {
+                throw new BadHttpRequestException($"Failed to register user. Details: {ex.Message}");
+            }
         }
         // end::register[]
 
@@ -107,7 +115,7 @@ namespace Neoflix.Services
                 return Task.FromResult(safeProperties);
             }
 
-            return Task.FromResult<Dictionary<string,object>>(null);
+            return Task.FromResult<Dictionary<string, object>>(null);
         }
         // end::authenticate[]
 
