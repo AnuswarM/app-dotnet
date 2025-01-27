@@ -66,7 +66,11 @@ namespace Neoflix.Services
 
                 return safeProperties;
             }
-            catch (Exception ex)
+            catch (ClientException ex) when (ex.Code == "Neo.ClientError.Schema.ConstraintValidationFailed")
+            {
+                throw new ValidationException(ex.Message, email);
+            }            
+            catch (Exception ex) 
             {
                 throw new BadHttpRequestException($"Failed to register user. Details: {ex.Message}");
             }
