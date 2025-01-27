@@ -43,13 +43,14 @@ namespace Neoflix.Services
 
             return await session.ExecuteReadAsync(async tx =>
             {
+                var favorites = await GetUserFavoritesAsync(tx, userId);
                 var cursor = await tx.RunAsync(@$"
                                     MATCH (m:Movie)
                                     WHERE m.{sort} IS NOT NULL
-                                    RETURN m {{ .* }} AS movie
+                                    RETURN m {{ .*, favorite: m.tmdbId IN $favorites }} AS movie
                                     ORDER BY m.{sort} {order.ToString("G").ToUpper()}
                                     SKIP $skip
-                                    LIMIT $limit", new { skip, limit });
+                                    LIMIT $limit", new { skip, limit, favorites });
 
                 var response = await cursor.ToListAsync();
                 var movies = response.Select(res => res["movie"].As<Dictionary<string, object>>()).ToArray();
@@ -203,9 +204,14 @@ namespace Neoflix.Services
         /// The task result contains a list of tmdbIds.
         /// </returns>
         // tag::getUserFavorites[]
-        private async Task<string[]> GetUserFavoritesAsync(IAsyncTransaction transaction, string userId)
+        private async Task<string[]> GetUserFavoritesAsync(IAsyncQueryRunner transaction, string userId)
         {
-            return await Task.FromResult(Array.Empty<string>());
+            if (userId == null)
+                return new string[] { };
+
+            var cursor = await transaction.RunAsync("MATCH (u:User {userId: $userId})-[:HAS_FAVORITE]->(m) RETURN m.tmdbId AS id", new { userId });
+            var records = await cursor.ToListAsync();
+            return records.Select(x => x["id"].As<string>()).ToArray();
         }
         // end::getUserFavorites[]
     }
