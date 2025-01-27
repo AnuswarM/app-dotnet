@@ -69,8 +69,8 @@ namespace Neoflix.Services
             catch (ClientException ex) when (ex.Code == "Neo.ClientError.Schema.ConstraintValidationFailed")
             {
                 throw new ValidationException(ex.Message, email);
-            }            
-            catch (Exception ex) 
+            }
+            catch (Exception ex)
             {
                 throw new BadHttpRequestException($"Failed to register user. Details: {ex.Message}");
             }
@@ -97,29 +97,36 @@ namespace Neoflix.Services
         /// The task result contains an authorized user or null when the user is not found or password is incorrect.
         /// </returns>
         // tag::authenticate[]
-        public Task<Dictionary<string, object>> AuthenticateAsync(string email, string plainPassword)
+        public async Task<Dictionary<string, object>> AuthenticateAsync(string email, string plainPassword)
         {
-            if (email == "graphacademy@neo4j.com" && plainPassword == "letmein")
+            var session = _driver.AsyncSession();
+
+            try
             {
-                var exampleUser = new Dictionary<string, object>
+                return await session.ExecuteReadAsync(async tx =>
                 {
-                    ["identity"] = 1,
-                    ["properties"] = new Dictionary<string, object>
+                    var cursor = await tx.RunAsync(@"MATCH (u: User {email: $email}) RETURN u { .* } AS u", new { email });
+
+                    if (!await cursor.FetchAsync())
                     {
-                        ["userId"] = 1,
-                        ["email"] = "graphacademy@neo4j.com",
-                        ["name"] = "Graph Academy"
+                        return null;
                     }
-                };
 
-                var safeProperties = SafeProperties(exampleUser["properties"] as Dictionary<string, object>);
+                    var user = cursor.Current["u"].As<Dictionary<string, object>>();
+                    if (!BCryptNet.Verify(plainPassword, user["password"].As<string>()))
+                    {
+                        return null;
+                    }
 
-                safeProperties.Add("token", JwtHelper.CreateToken(GetUserClaims(safeProperties)));
-
-                return Task.FromResult(safeProperties);
+                    var safeProperties = SafeProperties(user);
+                    safeProperties.Add("token", JwtHelper.CreateToken(GetUserClaims(safeProperties)));
+                    return safeProperties;
+                });
             }
-
-            return Task.FromResult<Dictionary<string, object>>(null);
+            catch(Exception ex)
+            {
+                throw new BadHttpRequestException(ex.Message);
+            }
         }
         // end::authenticate[]
 
