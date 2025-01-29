@@ -1,7 +1,7 @@
 ﻿using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Neo4j.Driver;
-using Neoflix.Example;
 using Neoflix.Exceptions;
 
 namespace Neoflix.Services
@@ -37,8 +37,27 @@ namespace Neoflix.Services
         public async Task<Dictionary<string, object>[]> GetForMovieAsync(string id, string sort = "timestamp",
             Ordering order = Ordering.Asc, int limit = 6, int skip = 0)
         {
-            // TODO: Get ratings for a Movie
-            return await Task.FromResult(Fixtures.Ratings);
+            await using var session = _driver.AsyncSession();
+
+            return await session.ExecuteReadAsync(async tx =>
+            {
+                var cursor = await tx.RunAsync($@"
+                                MATCH (u:User)-[r:RATED]->(m:Movie {{tmdbId: $id}})
+                                RETURN r {{
+                                    .rating,
+                                    .timestamp,
+                                    user: u {{
+                                        .userId, .name
+                                    }}
+                                }} AS review
+                                ORDER BY r.{sort} {order.ToString("G").ToUpper()}
+                                SKIP $skip
+                                LIMIT $limit", new { skip, limit, id });
+
+                var reviews = await cursor.ToListAsync();
+                var response = reviews.Select(rating => rating["review"].As<Dictionary<string, object>>()).ToArray();
+                return response;
+            });
         }
         // end::forMovie[]
 
