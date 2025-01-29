@@ -2,8 +2,10 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Xml.Linq;
 using Neo4j.Driver;
 using Neoflix.Example;
+using Neoflix.Exceptions;
 
 namespace Neoflix.Services
 {
@@ -194,10 +196,29 @@ namespace Neoflix.Services
         // tag::findById[]
         public async Task<Dictionary<string, object>> FindByIdAsync(string id, string userId = null)
         {
-            // TODO: Find a movie by its ID
-            // MATCH (m:Movie {tmdbId: $id})
+            var session = _driver.AsyncSession();
 
-            return await Task.FromResult(Fixtures.Goodfellas);
+            return await session.ExecuteReadAsync(async tx =>
+            {
+                var favorites = await GetUserFavoritesAsync(tx, userId);
+                var cursor = await tx.RunAsync(@$"
+                                    MATCH (m:Movie {{tmdbId: $id}})
+                                    RETURN m {{
+                                      .*,
+                                      actors: [ (a)-[r:ACTED_IN]->(m) | a {{ .*, role: r.role }} ],
+                                      directors: [ (d)-[:DIRECTED]->(m) | d {{ .* }} ],
+                                      genres: [ (m)-[:IN_GENRE]->(g) | g {{ .name }}],
+                                      ratingCount: count{{ (m)<-[:RATED]-() }},
+                                      favorite: m.tmdbId IN $favorites
+                                    }} AS movie
+                                    LIMIT 1", new { favorites, id });
+
+                if(!await cursor.FetchAsync())
+                {
+                    throw new NotFoundException($"Could not find a movie with the id '{id}'.");
+                }
+                return cursor.Current["movie"].As<Dictionary<string, object>>();
+            });
         }
         // end::findById[]
 
@@ -215,21 +236,34 @@ namespace Neoflix.Services
         /// The task result contains a list of records.
         /// </returns>
         // tag::getSimilarMovies[]
-        public async Task<Dictionary<string, object>[]> GetSimilarMoviesAsync(string id, int limit, int skip)
+        public async Task<Dictionary<string, object>[]> GetSimilarMoviesAsync(string id, int limit, int skip, string userId = null)
         {
-            // TODO: Get similar movies based on genres or ratings
-            var random = new Random();
-            var exampleData = Fixtures.Popular
-                .Skip(skip)
-                .Take(limit)
-                .Select(popularItem =>
-                    popularItem.Concat(new[]
-                        {
-                            new KeyValuePair<string, object>("score", Math.Round(random.NextDouble() * 100, 2))
-                        })
-                        .ToDictionary(kvp => kvp.Key, kvp => kvp.Value))
-                .ToArray();
-            return await Task.FromResult(exampleData);
+            var session = _driver.AsyncSession();
+
+            return await session.ExecuteReadAsync(async tx =>
+            {
+                var favorites = await GetUserFavoritesAsync(tx, userId);
+                var cursor = await tx.RunAsync(@$"
+                                    MATCH (:Movie {{tmdbId: $id}})-[:IN_GENRE|ACTED_IN|DIRECTED]->()<-[:IN_GENRE|ACTED_IN|DIRECTED]-(m)
+                                    WHERE m.imdbRating IS NOT NULL
+
+                                    WITH m, count(*) AS inCommon
+                                    WITH m, inCommon, m.imdbRating * inCommon AS score
+                                    ORDER BY score DESC
+
+                                    SKIP $skip
+                                    LIMIT $limit
+
+                                    RETURN m {{
+                                        .*,
+                                        score: score,
+                                        favorite: m.tmdbId IN $favorites
+                                    }} AS movie", new { skip, limit, favorites, id });
+
+                var response = await cursor.ToListAsync();
+                var movies = response.Select(res => res["movie"].As<Dictionary<string, object>>()).ToArray();
+                return movies;
+            });
             // end::getSimilarMovies[]
         }
 
