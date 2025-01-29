@@ -3,7 +3,6 @@ using System.Linq;
 using System.Threading.Tasks;
 using Neo4j.Driver;
 using Neoflix.Example;
-using Neoflix.Exceptions;
 
 namespace Neoflix.Services
 {
@@ -39,13 +38,34 @@ namespace Neoflix.Services
         /// The task result contains a list of records.
         /// </returns>
         // tag::all[]
-        public Task<Dictionary<string, object>[]> AllAsync()
+        public async Task<Dictionary<string, object>[]> AllAsync()
         {
-            // TODO: Open a new session
-            // TODO: Get a list of Genres from the database
-            // TODO: Close the session
+            var session = _driver.AsyncSession();
 
-            return Task.FromResult(Fixtures.Genres.ToArray());
+            return await session.ExecuteReadAsync(async tx =>
+            {
+                var cursor = await tx.RunAsync(@"MATCH (g:Genre)
+                                WHERE g.name <> '(no genres listed)'
+
+                                CALL {
+                                  WITH g
+                                  MATCH (g)<-[:IN_GENRE]-(m:Movie)
+                                  WHERE m.imdbRating IS NOT NULL AND m.poster IS NOT NULL
+                                  RETURN m.poster AS poster
+                                  ORDER BY m.imdbRating DESC LIMIT 1
+                                }
+
+                                RETURN g {
+                                  .*,
+                                  movies: count { (g)<-[:IN_GENRE]-(:Movie) },
+                                  poster: poster
+                                } as genre
+                                ORDER BY g.name ASC");
+
+                var genres = await cursor.ToListAsync();
+                var response = genres.Select(genre => genre["genre"].As<Dictionary<string, object>>()).ToArray();
+                return response;
+            });
         }
         // end::all[]
 
