@@ -36,8 +36,27 @@ namespace Neoflix.Services
         // tag::all[]
         public async Task<Dictionary<string, object>[]> AllAsync(string? query, string sort = "name", Ordering order = Ordering.Asc, int limit = 6, int skip = 0)
         {
-            // TODO: Get a list of people from the database
-            return await Task.FromResult(Fixtures.People.Skip(skip).Take(limit).ToArray());
+            await using var session = _driver.AsyncSession();
+
+            return await session.ExecuteReadAsync(async tx =>
+            {
+                var personFilter = query != null
+                    ? "WHERE p.name CONTAINS $query"
+                    : string.Empty;
+
+                var cursor = await tx.RunAsync($@"
+                        MATCH (p:Person)
+                        {personFilter}
+                        RETURN p {{ .* }} AS person
+                        ORDER BY p.`{sort}` {order.ToString("G").ToUpper()}
+                        SKIP $skip
+                        LIMIT $limit", new { query, skip, limit });
+                var records = await cursor.ToListAsync();
+
+                return records
+                    .Select(x => x["person"].As<Dictionary<string, object>>())
+                    .ToArray();
+            });
         }
         // end::all[]
 
