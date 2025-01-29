@@ -79,10 +79,23 @@ namespace Neoflix.Services
         public async Task<Dictionary<string, object>[]> GetByGenreAsync(string name, string sort = "title",
             Ordering order = Ordering.Asc, int limit = 6, int skip = 0, string userId = null)
         {
-            // TODO: Get Movies in a Genre
-            // MATCH (m:Movie)-[:IN_GENRE]->(:Genre {name: $name})
+            var session = _driver.AsyncSession();
 
-            return await Task.FromResult(Fixtures.Popular.Skip(skip).Take(limit).ToArray());
+            return await session.ExecuteReadAsync(async tx =>
+            {
+                var favorites = await GetUserFavoritesAsync(tx, userId);
+                var cursor = await tx.RunAsync(@$"
+                                    MATCH (m:Movie)-[:IN_GENRE]->(:Genre {{name: $name}})
+                                    WHERE m.{sort} IS NOT NULL
+                                    RETURN m {{ .*, favorite: m.tmdbId IN $favorites }} AS movie
+                                    ORDER BY m.{sort} {order.ToString("G").ToUpper()}
+                                    SKIP $skip
+                                    LIMIT $limit", new { skip, limit, favorites, name });
+
+                var response = await cursor.ToListAsync();
+                var movies = response.Select(res => res["movie"].As<Dictionary<string, object>>()).ToArray();
+                return movies;
+            });
         }
         // end::getByGenre[]
 
@@ -106,10 +119,23 @@ namespace Neoflix.Services
         public async Task<Dictionary<string, object>[]> GetForActorAsync(string id, string sort = "title",
             Ordering order = Ordering.Asc, int limit = 6, int skip = 0, string userId = null)
         {
-            // TODO: Get Movies acted in by a Person
-            // MATCH (:Person {tmdbId: $id})-[:ACTED_IN]->(m:Movie)
+            var session = _driver.AsyncSession();
 
-            return await Task.FromResult(Fixtures.Roles.Skip(skip).Take(limit).ToArray());
+            return await session.ExecuteReadAsync(async tx =>
+            {
+                var favorites = await GetUserFavoritesAsync(tx, userId);
+                var cursor = await tx.RunAsync(@$"
+                                    MATCH (:Person {{tmdbId: $id}})-[:ACTED_IN]->(m:Movie)
+                                    WHERE m.{sort} IS NOT NULL
+                                    RETURN m {{ .*, favorite: m.tmdbId IN $favorites }} AS movie
+                                    ORDER BY m.{sort} {order.ToString("G").ToUpper()}
+                                    SKIP $skip
+                                    LIMIT $limit", new { skip, limit, favorites, id });
+
+                var response = await cursor.ToListAsync();
+                var movies = response.Select(res => res["movie"].As<Dictionary<string, object>>()).ToArray();
+                return movies;
+            });
         }
         // end::getForActor[]
 
@@ -133,10 +159,23 @@ namespace Neoflix.Services
         public async Task<Dictionary<string, object>[]> GetForDirectorAsync(string id, string sort = "title",
             Ordering order = Ordering.Asc, int limit = 6, int skip = 0, string userId = null)
         {
-            // TODO: Get Movies directed by a Person
-            // MATCH (:Person {tmdbId: $id})-[:DIRECTED]->(m:Movie)
+            var session = _driver.AsyncSession();
 
-            return await Task.FromResult(Fixtures.Popular.Skip(skip).Take(limit).ToArray());
+            return await session.ExecuteReadAsync(async tx =>
+            {
+                var favorites = await GetUserFavoritesAsync(tx, userId);
+                var cursor = await tx.RunAsync(@$"
+                                    MATCH (:Person {{tmdbId: $id}})-[:DIRECTED]->(m:Movie)
+                                    WHERE m.{sort} IS NOT NULL
+                                    RETURN m {{ .*, favorite: m.tmdbId IN $favorites }} AS movie
+                                    ORDER BY m.{sort} {order.ToString("G").ToUpper()}
+                                    SKIP $skip
+                                    LIMIT $limit", new { skip, limit, favorites, id });
+
+                var response = await cursor.ToListAsync();
+                var movies = response.Select(res => res["movie"].As<Dictionary<string, object>>()).ToArray();
+                return movies;
+            });
         }
         // end::getForDirector[]
 
@@ -204,7 +243,7 @@ namespace Neoflix.Services
         /// The task result contains a list of tmdbIds.
         /// </returns>
         // tag::getUserFavorites[]
-        private async Task<string[]> GetUserFavoritesAsync(IAsyncQueryRunner transaction, string userId)
+        private static async Task<string[]> GetUserFavoritesAsync(IAsyncQueryRunner transaction, string userId)
         {
             if (userId == null)
                 return new string[] { };
