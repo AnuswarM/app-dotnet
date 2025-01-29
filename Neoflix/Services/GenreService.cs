@@ -3,6 +3,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Neo4j.Driver;
 using Neoflix.Example;
+using Neoflix.Exceptions;
 
 namespace Neoflix.Services
 {
@@ -79,18 +80,32 @@ namespace Neoflix.Services
         /// The task result contains a record.
         /// </returns>
         // tag::find[]
-        public Task<Dictionary<string, object>> FindGenreAsync(string name)
+        public async Task<Dictionary<string, object>> FindGenreAsync(string name)
         {
-            // TODO: Open a new session
-            // TODO: Get Genre information from the database
-            // TODO: return null if the genre is not found
-            // TODO: Close the session
+            var session = _driver.AsyncSession();
 
-            return Task.FromResult(
-                Fixtures
-                    .Genres
-                    .OfType<Dictionary<string, object>>()
-                    .First(x => x["name"] == name));
+            return await session.ExecuteReadAsync(async tx =>
+            {
+                var cursor = await tx.RunAsync(@"MATCH (g:Genre {name: $name})<-[:IN_GENRE]-(m:Movie)
+                                        WHERE m.imdbRating IS NOT NULL AND m.poster IS NOT NULL AND g.name <> '(no genres listed)'
+                                        WITH g, m
+                                        ORDER BY m.imdbRating DESC
+
+                                        WITH g, head(collect(m)) AS movie
+
+                                        RETURN g {
+                                            .name,
+                                            movies: count { (g)<-[:IN_GENRE]-() },
+                                            poster: movie.poster
+                                        } AS genre", new { name });
+
+                if(!await cursor.FetchAsync())
+                {
+                    throw new NotFoundException($"Could not find a genre with the name '{name}'.");
+                }
+
+                return cursor.Current["genre"].As<Dictionary<string, object>>();
+            });
         }
         // end::find[]
     }
